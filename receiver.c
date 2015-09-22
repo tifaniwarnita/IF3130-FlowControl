@@ -26,12 +26,14 @@ int sockfd; //Socket declaration
 Byte rxbuf[BUFFSIZE];
 QTYPE rcvq = { 0, 0, 0, BUFFSIZE, rxbuf };
 QTYPE *rxq = &rcvq;
-Byte c; // Current
 Byte sent_xonxoff = XON;
 bool send_xon = false,
 send_xoff = false;
 int recvlen; // # bytes received
 int msgcnt = 0;	// Count # of messages we received
+struct sockaddr_in myaddr;	// Our address
+struct sockaddr_in remaddr;	// Remote address
+socklen_t addrlen = sizeof(remaddr); // Length of addresses
 
 /* Functions declaration */
 static Byte *rcvchar(int socksockfd, QTYPE *queue);
@@ -41,10 +43,7 @@ void* consumeBuff(void *);
 int main(int argc, char **argv)
 /* Argv and argc will be used to define port number */
 {	
-	struct sockaddr_in myaddr;	// Our address
-	struct sockaddr_in remaddr;	// Remote address
-	socklen_t addrlen = sizeof(remaddr); // Length of addresses
-	Byte *c = NULL;
+	Byte c;
 
 	/* Create a socket and bind it to a specified port according argument initialization */ 
 		/* Create a UDP socket */
@@ -78,30 +77,13 @@ int main(int argc, char **argv)
 	pthread_create(&consumerbuff, NULL, consumeBuff, NULL);
 
 	/*** IF PARENT PROCESS ***/
-	/*while (true) {
+	while (true) {
 		c = *(rcvchar(sockfd, rxq));
 		/* Quit on end of file */
-		/*if (c == Endfile) {
+		if (c == Endfile) {
 			exit(0);
 		}
 	}
-
-	/* now loop, receiving data and printing what we received */
-	/*for (;;) {
-		printf("waiting on port %d\n", SERVICE_PORT);
-		recvlen = recvfrom(sockfd, buf, BUFFSIZE, 0, (struct sockaddr *)&remaddr, &addrlen);
-		if (recvlen > 0) {
-			buf[recvlen] = 0;
-			printf("received message: \"%s\" (%d bytes)\n", buf, recvlen);
-		}
-		else
-			printf("uh oh - something went wrong!\n");
-		sprintf(buf, "ack %d", msgcnt++);
-		printf("sending response \"%s\"\n", buf);
-		if (sendto(sockfd, buf, strlen(buf), 0, (struct sockaddr *)&remaddr, addrlen) < 0)
-			perror("sendto");
-	}
-	/* never exits */
 }
 
 void* consumeBuff(void *threadConsumer) {
@@ -110,7 +92,7 @@ void* consumeBuff(void *threadConsumer) {
 		/* Call q_get */
 		Byte *ch = q_get(rxq);
 		if (ch != NULL) { // Consume char
-			printf("Mengkonsumsi byte ke-%d: '%c'\n", *ch, rcvq->data[*ch]);
+			printf("Mengkonsumsi byte ke-%d: '%c'\n", *ch, rcvq.data[*ch]);
 		}
 		/* Can introduce some delay here. */
 		sleep(DELAY);
@@ -122,18 +104,38 @@ static Byte *rcvchar(int sockfd, QTYPE *queue) {
 If the number of characters in the receive buffer is above certain 
 level, then send XOFF and set a flag to notify transmitter. 
 Return a pointer to the buffer where data is put. */
-	recvlen = recvfrom(sockfd, rcvq, BUFFSIZE, 0, (struct sockaddr *)&remaddr, &addrlen);
-	if (recvlen > 0) {
-			rcvq[recvlen] = 0;
-			printf("Menerima byte ke-\n", recvlen);
+	Byte ch;
+
+	if (sent_xonxoff == XON) {
+		recvlen = recvfrom(sockfd, &ch, 1, 0, (struct sockaddr *)&remaddr, &addrlen);
+		if (recvlen > 0) {
+			msgcnt++;
+			// Circular buffer handling
+			if (queue->rear == 7)
+				queue->rear = 0;
+			else
+				queue->rear++;
+			queue->data[queue->rear] = ch;
+			queue->count--;
+			ch = 0;
+			printf("Menerima byte ke-%d\n", msgcnt);
+			if (queue->count >= MAXLIMIT && sent_xonxoff == XON) {
+				sent_xonxoff = XOFF;
+				send_xon = false,
+				send_xoff = true;
+				if (sendto(sockfd, &sent_xonxoff, 1, 0, (struct sockaddr *)&remaddr, addrlen) < 0)
+					perror("Failed send response");
+			}
+			return &queue->data[queue->rear];
 		}
-		else
+		else {
 			printf("uh oh - something went wrong!\n");
-		sprintf(buf, "ack %d", msgcnt++);
-		printf("sending response \"%s\"\n", buf);
-		if (sendto(sockfd, rcvq, strlen(rcvq), 0, (struct sockaddr *)&remaddr, addrlen) < 0)
-			perror("sendto");
+			return NULL;
+		}
+		if (sendto(sockfd, &ch, 1, 0, (struct sockaddr *)&remaddr, addrlen) < 0)
+			perror("Failed send response");
 	}
+
 }
 
 static Byte *q_get(QTYPE *queue) {
@@ -157,13 +159,13 @@ buffer is empty. */
 		else
 			queue->front++;
 		queue->count--;
-		if(queue->count == MAXLIMIT && sent_xonxoff == XOFF) {
+		if(queue->count < MAXLIMIT && sent_xonxoff == XOFF) {
 			/* Sending XON */
 			sent_xonxoff = XON;
 			send_xon = true,
 			send_xoff = false;
-			if (sendto(sockfd, &sent_xonxoff, 1, 0, (struct sockaddr *)&remaddr, slen)==-1) {
-				perror("Error sending flag XON");
+			if (sendto(sockfd, &sent_xonxoff, 1, 0, (struct sockaddr *)&remaddr, addrlen) < 0) {
+				perror("Failed send response");
 				exit(1);
 			}
 		}
