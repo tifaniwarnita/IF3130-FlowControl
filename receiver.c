@@ -6,6 +6,7 @@
 	Source	: Paul Krzyzanowski (https://www.cs.rutgers.edu/~pxk/417/notes/sockets/udp.html)
 */
 
+#include <arpa/inet.h>
 #include <pthread.h>
 #include "receiver.h"
 #include <stdbool.h>
@@ -15,20 +16,21 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 
-#define DELAY 500 // Delay to adjust speed of consuming buffer
+#define DELAY 2500 // Delay to adjust speed of consuming buffer
 #define BUFFSIZE 8 // Define receiver buffer size
-#define MAXLIMIT 7
+#define UPPERLIMIT 5 // Max limit of buffer size before sending XOFF
+#define LOWERLIMIT 2 // Lower limit of buffer size before sending XON
 
 int sockfd; //Socket declaration
 
-Byte rxbuf[BUFFSIZE];
-QTYPE rcvq = { 0, 0, 0, BUFFSIZE, rxbuf };
+Byte rxbuf[BUFFSIZE]; // Data of Circular Buffer
+QTYPE rcvq = { 0, 0, 0, BUFFSIZE, rxbuf }; //Circular Buffer
 QTYPE *rxq = &rcvq;
-Byte sent_xonxoff = XON;
-bool send_xon = false,
-send_xoff = false;
+Byte xonxoff = XON;
+bool xon_active = false;
 int recvlen; // # bytes received
 int msgcnt = 0;	// Count # of messages we received
 struct sockaddr_in myaddr;	// Our address
@@ -44,6 +46,7 @@ int main(int argc, char **argv)
 /* Argv and argc will be used to define port number */
 {	
 	Byte c;
+	struct ifreq ifr;
 
 	/* Create a socket and bind it to a specified port according argument initialization */ 
 		/* Create a UDP socket */
@@ -63,39 +66,47 @@ int main(int argc, char **argv)
 			return 0;
 		}
 
-	printf("Binding pada \n");
-	/* ifr.ifr_addr.sa_family = AF_INET;
-	strncpy(ifr.ifr_name,"eth0", IFNAMSIZ-1);
-	ioctl(fd, SIOCGIFADDR, &ifr);
-	printf("%s: %d\n", inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr),port); */
-
+	ifr.ifr_addr.sa_family = AF_INET; //Type of address to retrieve
+	strncpy(ifr.ifr_name,"eth0", IFNAMSIZ-1); //Copy the interface name in the ifreq structure
+	ioctl(sockfd, SIOCGIFADDR, &ifr); //Get the IP address
+	printf("Binding pada %s:%s\n", inet_ntoa(( (struct sockaddr_in *)&ifr.ifr_addr )->sin_addr), argv[1]);
+	
 	/* Initialize XON/XOFF flags */
-	send_xon = true; // Transmitter can send any message now
+	xon_active = true; // Transmitter can send any message now
 
 	/* Create child process */
 	pthread_t consumerbuff;
-	pthread_create(&consumerbuff, NULL, consumeBuff, NULL);
+	pthread_create(&consumerbuff, NULL, &consumeBuff, NULL);
 
 	/*** IF PARENT PROCESS ***/
 	while (true) {
-		c = *(rcvchar(sockfd, rxq));
-		/* Quit on end of file */
-		if (c == Endfile) {
-			exit(0);
-		}
+		//if (xon_active) {
+			c = *(rcvchar(sockfd, rxq));
+			//                     printf("ISI C: %c\n", c);
+			/* Quit on end of file */
+			if (c == Endfile) {
+				while (rcvq.count>0) {
+
+				}
+				exit(0);
+			}
+		//}
 	}
 }
 
 void* consumeBuff(void *threadConsumer) {
 	/*** CHILD PROCESS ***/
+	int i = 1;
 	while (true) {
 		/* Call q_get */
+		//printf("MULAI KONSUMSI\n");
 		Byte *ch = q_get(rxq);
-		if (ch != NULL) { // Consume char
-			printf("Mengkonsumsi byte ke-%d: '%c'\n", *ch, rcvq.data[*ch]);
+		if (ch != NULL) { // Consume char 	
+			printf("Mengkonsumsi byte ke-%d: '%c'\n", i, *ch);
+			++i;
 		}
 		/* Can introduce some delay here. */
-		sleep(DELAY);
+		sleep(3);
 	}
 }
 
@@ -105,36 +116,37 @@ If the number of characters in the receive buffer is above certain
 level, then send XOFF and set a flag to notify transmitter. 
 Return a pointer to the buffer where data is put. */
 	Byte ch;
+	unsigned int idx;
+	//printf("Keadaan QUEUE: {front: %d, rear: %d, count: %d}\n", queue->front, queue->rear, queue->count);
 
-	if (sent_xonxoff == XON) {
 		recvlen = recvfrom(sockfd, &ch, 1, 0, (struct sockaddr *)&remaddr, &addrlen);
 		if (recvlen > 0) {
 			msgcnt++;
 			// Circular buffer handling
-			if (queue->rear == 7)
-				queue->rear = 0;
-			else
-				queue->rear++;
-			queue->data[queue->rear] = ch;
-			queue->count--;
+			queue->data[queue->rear++] = ch;
+			queue->rear %= 8;
+			queue->count++;
+			//printf("%c\n", ch );
 			ch = 0;
 			printf("Menerima byte ke-%d\n", msgcnt);
-			if (queue->count >= MAXLIMIT && sent_xonxoff == XON) {
-				sent_xonxoff = XOFF;
-				send_xon = false,
-				send_xoff = true;
-				if (sendto(sockfd, &sent_xonxoff, 1, 0, (struct sockaddr *)&remaddr, addrlen) < 0)
+			if (queue->count >= UPPERLIMIT && xon_active) {
+				xon_active = false; // XOFF active
+				xonxoff = XOFF;
+				printf("Reached upper limit. Sending XOFF...\n");
+				if (sendto(sockfd, &xonxoff, 1, 0, (struct sockaddr *)&remaddr, addrlen) < 0)
 					perror("Failed send response");
 			}
-			return &queue->data[queue->rear];
+			
+			//printf("	IDX %d\n", idx);
+			//              printf("ISI QUEUE REAR-1 %c sedangkan REAR %c\n", queue->data[(queue->rear)-1], queue->data[queue->rear]);
+			
 		}
 		else {
-			printf("uh oh - something went wrong!\n");
-			return NULL;
+			printf("Something went wrong with receiver!\n");
 		}
-		if (sendto(sockfd, &ch, 1, 0, (struct sockaddr *)&remaddr, addrlen) < 0)
-			perror("Failed send response");
-	}
+		idx = queue->rear-1;
+		idx %= 8;
+		return &queue->data[idx];
 
 }
 
@@ -143,28 +155,32 @@ static Byte *q_get(QTYPE *queue) {
 buffer is empty. */
 
 	Byte *current = NULL;
+	//    printf("Keadaan QUEUE: {front: %d, rear: %d, count: %d}\n", queue->front, queue->rear, queue->count);
 
+
+	//                     printf("Jumlah di queue %d\n", queue->count);
 	/* Nothing in the queue */
 	if (!queue->count) {
-		return (NULL);
+		//printf("QUEUE KOSONG\n");
 	} 
-	/* Retrieve data from buffer, save it to "current" and "data" 
+	/* Retrieve data from buffer, save it to "current" 
 	If the number of characters in the receive buffer is below certain 
 	level, then send XON. Increment front index and check for wraparound. */
 	else {
-		*current = queue->data[queue->count];
+		//printf("QUEUE ADAAN\n");
+		//printf("%c\n", queue->data[queue->front]);
+		current = &queue->data[queue->front];
+		//printf("Current: %d\n", *current);
 		/* Circular buffer handling */
-		if(queue->front == 7)
-			queue->front = 0;
-		else
-			queue->front++;
+		queue->front++;
+		queue->front %= 8;
 		queue->count--;
-		if(queue->count < MAXLIMIT && sent_xonxoff == XOFF) {
+		if(queue->count <= LOWERLIMIT && !xon_active) {
 			/* Sending XON */
-			sent_xonxoff = XON;
-			send_xon = true,
-			send_xoff = false;
-			if (sendto(sockfd, &sent_xonxoff, 1, 0, (struct sockaddr *)&remaddr, addrlen) < 0) {
+			xon_active = true;
+			xonxoff = XON;
+			printf("Found more room in buffer. Sending XON...\n");
+			if (sendto(sockfd, &xonxoff, 1, 0, (struct sockaddr *)&remaddr, addrlen) < 0) {
 				perror("Failed send response");
 				exit(1);
 			}
