@@ -21,7 +21,7 @@
 
 #define DELAY 2500 // Delay to adjust speed of consuming buffer
 #define BUFFSIZE 8 // Define receiver buffer size
-#define UPPERLIMIT 5 // Max limit of buffer size before sending XOFF
+#define UPPERLIMIT 8 // Max limit of buffer size before sending XOFF
 #define LOWERLIMIT 2 // Lower limit of buffer size before sending XON
 
 int sockfd; //Socket declaration
@@ -88,6 +88,7 @@ int main(int argc, char **argv)
 				while (rcvq.count>0) {
 
 				}
+				printf("End of file character has been received and the buffer is already empty.\n");
 				exit(0);
 			}
 		//}
@@ -101,12 +102,12 @@ void* consumeBuff(void *threadConsumer) {
 		/* Call q_get */
 		//printf("MULAI KONSUMSI\n");
 		Byte *ch = q_get(rxq);
-		if (ch != NULL) { // Consume char 	
-			printf("Mengkonsumsi byte ke-%d: '%c'\n", i, *ch);
+		if (ch != NULL && ((*ch>=32) || (*ch==CR) || (*ch==LF) || (*ch==Endfile))) { // Consume char 	
+			printf("Mengkonsumsi byte ke-%d: '%c' - %d\n", i, *ch, *ch);
 			++i;
+			sleep(3);
 		}
 		/* Can introduce some delay here. */
-		sleep(3);
 	}
 }
 
