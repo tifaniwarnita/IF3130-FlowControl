@@ -1,78 +1,111 @@
-/*
-        demo-udp-03: udp-send: a simple udp client
-	send udp messages
-	This sends a sequence of messages (the # of messages is defined in MSGS)
-	The messages are sent to a port defined in SERVICE_PORT 
+/* 
+	Tifani Warnita	13513055
+	Asanilta Fahda	13513079
 
-        usage:  udp-send
-
-        Paul Krzyzanowski
-*/
+	File	: transmitter.c
+*/ 
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <netdb.h>
 #include <sys/socket.h>
-#include "port.h"
+#include <pthread.h>
+#include "transmitter.h"
 
-#define BUFLEN 2048
-#define MSGS 5	/* number of messages to send */
+Byte rcvd_signal;
+struct sockaddr_in myaddr, remaddr;
+int sockfd, i, slen=sizeof(remaddr);
+int recvlen;
 
-int main(void)
-/* Argv and argc will be used to define ip address, port number, and textfile's name */
+int main(int argc, char* argv[])
 {
-	struct sockaddr_in myaddr, remaddr;
-	int fd, i, slen=sizeof(remaddr);
-	char buf[BUFLEN];	/* message buffer */
-	int recvlen;		/* # bytes in acknowledgement message */
-	char *server = "127.0.0.1";	/* change this to use a different server */
+	char *server = argv[1];
+	int service_port = atoi(argv[2]);
+	char *filename = argv[3];
+	int msgcnt = 0;
+	Byte ch;
+
+	printf(">> transmitter %s %d %s\n",server,service_port,filename);
 
 	/* create a socket */
 
-	if ((fd=socket(AF_INET, SOCK_DGRAM, 0))==-1)
-		printf("socket created\n");
+	if ((sockfd=socket(AF_INET, SOCK_DGRAM, 0))==-1)
+		printf("Membuat socket untuk koneksi ke %s:%d\n",server,service_port);
 
 	/* bind it to all local addresses and pick any port number */
 
-	memset((char *)&myaddr, 0, sizeof(myaddr));
+	/*memset((char *)&myaddr, 0, sizeof(myaddr));
 	myaddr.sin_family = AF_INET;
 	myaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	myaddr.sin_port = htons(0);
 
-	if (bind(fd, (struct sockaddr *)&myaddr, sizeof(myaddr)) < 0) {
+	if (bind(sockfd, (struct sockaddr *)&myaddr, sizeof(myaddr)) < 0) {
 		perror("bind failed");
 		return 0;
-	}       
-
-	/* now define remaddr, the address to whom we want to send messages */
-	/* For convenience, the host address is expressed as a numeric IP address */
-	/* that we will convert to a binary format via inet_aton */
+	}  */    
 
 	memset((char *) &remaddr, 0, sizeof(remaddr));
 	remaddr.sin_family = AF_INET;
-	remaddr.sin_port = htons(SERVICE_PORT);
+	remaddr.sin_port = htons(service_port);
 	if (inet_aton(server, &remaddr.sin_addr)==0) {
 		fprintf(stderr, "inet_aton() failed\n");
 		exit(1);
 	}
 
-	/* now let's send the messages */
 
-	for (i=0; i < MSGS; i++) {
-		printf("Sending packet %d to %s port %d\n", i, server, SERVICE_PORT);
-		sprintf(buf, "This is packet %d", i);
-		if (sendto(fd, buf, strlen(buf), 0, (struct sockaddr *)&remaddr, slen)==-1) {
-			perror("sendto");
-			exit(1);
+	/* Create child process */
+	pthread_t signalreceiver;
+	pthread_create(&signalreceiver, NULL, receiveSignal, NULL);
+
+
+	/*Parent Process*/
+	FILE *fp;
+	fp = fopen(filename,"r");
+	
+	while (!feof(fp)) {
+		if (rcvd_signal != XOFF) {
+			ch = fgetc(fp);
+			if(sendto(sockfd, &ch, 1, 0, (struct sockaddr *)&remaddr, slen)==-1) {
+				perror("sendto");
+				exit(1);
+			} else {
+				msgcnt++;
+				if (ch==LF) {
+					printf("Mengirim byte ke-%d: 'Line Feed'\n",msgcnt);
+				} else if (ch==CR) {
+					printf("Mengirim byte ke-%d: 'Carriage Return'\n",msgcnt);
+				} else {
+					printf("Mengirim byte ke-%d: '%c'-%d\n",msgcnt,ch,ch);
+				}
+			}
+		} else {
+			printf("XOFF diterima.\n");
+			while (rcvd_signal==XOFF) {
+				printf("Menunggu XON...\n");
+				sleep(1);
+			}
+			printf("XON diterima.\n");
 		}
-		/* now receive an acknowledgement from the server */
-		recvlen = recvfrom(fd, buf, BUFLEN, 0, (struct sockaddr *)&remaddr, &slen);
-                if (recvlen >= 0) {
-                        buf[recvlen] = 0;	/* expect a printable string - terminate it */
-                        printf("received message: \"%s\"\n", buf);
-                }
 	}
-	close(fd);
+	ch = Endfile;
+	if(sendto(sockfd, &ch, 1, 0, (struct sockaddr *)&remaddr, slen)==-1) {
+	    perror("sendto");
+	    exit(1);
+	} else {
+	    printf("End of file\n");
+	}
+
+	close(sockfd);
 	return 0;
+}
+
+void* receiveSignal(void *threadSignalReceiver) {
+	Byte ch;
+	for(;;) {
+		recvlen = recvfrom(sockfd, &ch, 1, 0, (struct sockaddr *)&remaddr, &slen);
+        if (recvlen > 0) {
+            rcvd_signal = ch;
+    	}
+	}
 }
