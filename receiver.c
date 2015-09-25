@@ -105,7 +105,7 @@ void* consumeBuff(void *threadConsumer) {
 		if (ch != NULL && ((*ch>=32) || (*ch==CR) || (*ch==LF) || (*ch==Endfile))) { // Consume char 	
 			printf("Mengkonsumsi byte ke-%d: '%c' - %d\n", i, *ch, *ch);
 			++i;
-			sleep(3);
+			sleep(3); 
 		}
 		/* Can introduce some delay here. */
 	}
@@ -127,6 +127,8 @@ Return a pointer to the buffer where data is put. */
 			queue->data[queue->rear++] = ch;
 			queue->rear %= 8;
 			queue->count++;
+			if (queue->count > 8)
+				queue->count = 8;
 			//printf("%c\n", ch );
 			ch = 0;
 			printf("Menerima byte ke-%d\n", msgcnt);
