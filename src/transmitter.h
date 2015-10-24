@@ -8,6 +8,7 @@
 #ifndef _TRANSMITTER_H_ 
 #define _TRANSMITTER_H_ 
 
+#define Startfile 1 /* Start of file character */
 #define Endfile 26 /* End of file character */
 #define CR 13 /* Carriage Return */
 #define LF 10 /* Line Feed */ 
